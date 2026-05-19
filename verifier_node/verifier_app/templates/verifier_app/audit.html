@@ -1,0 +1,159 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Verifier</title>
+  <style>
+    * {
+      box-sizing: border-box;
+    }
+    body {
+      margin: 0;
+      background: #f6f7f9;
+      color: #172033;
+      font-family: Arial, sans-serif;
+    }
+    main {
+      width: min(720px, calc(100% - 32px));
+      margin: 40px auto;
+      background: #fff;
+      border: 1px solid #d9dee8;
+      border-radius: 8px;
+      padding: 24px;
+    }
+    h1 {
+      margin: 0 0 8px;
+      font-size: 28px;
+    }
+    p {
+      margin: 0 0 18px;
+      color: #5d6a7e;
+      line-height: 1.5;
+    }
+    .status {
+      display: inline-block;
+      margin-bottom: 22px;
+      padding: 8px 12px;
+      border-radius: 6px;
+      background: #e8f6f2;
+      color: #11634f;
+      font-weight: 700;
+    }
+    .actions {
+      display: flex;
+      gap: 10px;
+      margin-bottom: 24px;
+      flex-wrap: wrap;
+    }
+    a, button {
+      min-height: 40px;
+      border-radius: 6px;
+      padding: 10px 14px;
+      font: inherit;
+      font-weight: 700;
+    }
+    a {
+      color: #fff;
+      background: #274c77;
+      text-decoration: none;
+    }
+    button {
+      color: #274c77;
+      background: #fff;
+      border: 1px solid #b9c2d2;
+      cursor: pointer;
+    }
+    h2 {
+      margin: 0 0 12px;
+      font-size: 20px;
+    }
+    .list {
+      display: grid;
+      gap: 10px;
+    }
+    .item {
+      border: 1px solid #d9dee8;
+      border-radius: 6px;
+      padding: 12px;
+      background: #fbfcfe;
+    }
+    .item strong {
+      display: block;
+      margin-bottom: 5px;
+      color: #11634f;
+    }
+    .item.bad strong {
+      color: #9b2c2c;
+    }
+    .item.warn strong {
+      color: #8a5a00;
+    }
+    .item span {
+      display: block;
+      color: #5d6a7e;
+      line-height: 1.4;
+      overflow-wrap: anywhere;
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Verifier</h1>
+    <p>Waiting for presentations from the holder wallet.</p>
+    <div class="status">Ready</div>
+
+    <div class="actions">
+      <a href="http://127.0.0.1:8002/wallet/ui/">Open Wallet</a>
+      <button id="refresh">Refresh</button>
+    </div>
+
+    <h2>Recent Checks</h2>
+    <div id="audits" class="list">
+      <div class="item"><strong>Loading...</strong></div>
+    </div>
+  </main>
+
+  <script>
+    const audits = document.getElementById("audits");
+    const refresh = document.getElementById("refresh");
+
+    function row(record) {
+      const disclosed = Object.keys(record.disclosed_claims || {});
+      const title = record.valid ? "Valid" : "Invalid";
+      const text = record.valid
+        ? `Disclosed: ${disclosed.length ? disclosed.join(", ") : "none"}`
+        : (record.reason || "Verification failed.");
+
+      return `
+        <div class="item ${record.valid ? "" : "bad"}">
+          <strong>${title}</strong>
+          <span>${text}</span>
+          <span>${record.created_at}</span>
+        </div>`;
+    }
+
+    async function load() {
+      try {
+        const response = await fetch("/api/v1/verify/audits/");
+        const payload = await response.json();
+
+        if (!payload.ready) {
+          audits.innerHTML = `<div class="item warn"><strong>Setup needed</strong><span>${payload.error}</span></div>`;
+          return;
+        }
+
+        audits.innerHTML = payload.audits.length
+          ? payload.audits.map(row).join("")
+          : `<div class="item"><strong>No checks yet</strong><span>Submit from the holder wallet.</span></div>`;
+      } catch (error) {
+        audits.innerHTML = `<div class="item bad"><strong>Cannot load checks</strong><span>${error.message}</span></div>`;
+      }
+    }
+
+    refresh.addEventListener("click", load);
+    load();
+    setInterval(load, 3000);
+  </script>
+</body>
+</html>
