@@ -275,10 +275,28 @@
       const response = await fetch("http://127.0.0.1:8002/api/v1/wallet/holders/");
       const payload = await response.json();
       holderSelect.innerHTML = payload.holders.map((holder) => (
-        `<option value="${holder.holder_id}" data-url="${holder.holder_url}" data-key-id="${holder.key_id}">
+        `<option value="${holder.holder_id}" data-url="${holder.holder_url}" data-key-id="${holder.key_id}" data-display-name="${holder.display_name}">
           ${holder.display_name} (${holder.holder_id})
         </option>`
       )).join("");
+      // when a holder is selected, clear other form fields and populate name/id
+      holderSelect.addEventListener('change', () => {
+        const opt = holderSelect.selectedOptions[0];
+        const display = opt ? opt.dataset.displayName : '';
+        // set student name and id
+        const nameInput = form.querySelector('[name="student_name"]');
+        const idInput = form.querySelector('[name="student_id"]');
+        if (nameInput) nameInput.value = display || '';
+        if (idInput) idInput.value = holderSelect.value || '';
+        // clear other fields
+        const fieldsToClear = ['degree_title','university_name','graduation_year','department','grade_summary'];
+        fieldsToClear.forEach(name => {
+          const el = form.querySelector(`[name="${name}"]`);
+          if (el) el.value = '';
+        });
+      });
+      // apply initial selection
+      holderSelect.dispatchEvent(new Event('change'));
     }
 
     async function loadCredentialsForRevocation() {

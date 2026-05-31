@@ -89,19 +89,23 @@ def list_credentials(request: HttpRequest) -> JsonResponse:
 
 @require_GET
 def list_holders(request: HttpRequest) -> JsonResponse:
-    holders = ensure_default_holders(register_keys=True)
+    # Ensure the default holders exist and their keys are registered,
+    # then return all holder profiles from the database so newly created
+    # students appear in the UI dropdown.
+    ensure_default_holders(register_keys=True)
+    records = HolderProfile.objects.all().order_by("holder_id")
     return JsonResponse(
         {
             "holders": [
                 {
-                    "holder_id": holder.holder_id,
-                    "display_name": holder.display_name,
-                    "email": holder.email,
-                    "holder_url": holder_public_url(holder),
-                    "key_id": holder.keypair.key_id,
-                    "public_key_fingerprint": holder.keypair.public_key_fingerprint,
+                    "holder_id": h.holder_id,
+                    "display_name": h.display_name,
+                    "email": h.email,
+                    "holder_url": holder_public_url(h),
+                    "key_id": getattr(getattr(h, 'keypair', None), 'key_id', 'default'),
+                    "public_key_fingerprint": getattr(getattr(h, 'keypair', None), 'public_key_fingerprint', ""),
                 }
-                for holder in holders
+                for h in records
             ]
         }
     )
@@ -178,5 +182,62 @@ def generate_presentation(request: HttpRequest) -> JsonResponse:
         return JsonResponse(presentation)
     except WalletCredential.DoesNotExist:
         return JsonResponse({"error": "Credential was not found in the wallet."}, status=404)
+    except ValueError as exc:
+        return JsonResponse({"error": str(exc)}, status=400)
+
+
+@csrf_exempt
+@require_POST
+def create_holder(request: HttpRequest) -> JsonResponse:
+    try:
+        body = _json_body(request)
+        holder_id = str(body.get("holder_id", "")).strip()
+        display_name = str(body.get("display_name", "")).strip() or holder_id
+        email = str(body.get("email", "")).strip()
+
+        if not holder_id:
+            return JsonResponse({"error": "holder_id is required."}, status=400)
+
+        holder, created = HolderProfile.objects.get_or_create(
+            holder_id=holder_id, defaults={"display_name": display_name, "email": email}
+        )
+
+        if not created:
+            return JsonResponse({"created": False, "error": "Holder already exists."}, status=409)
+
+        # create keypair and register with the trusted registry
+        private_pem, public_pem = generate_rsa_keypair()
+        kp = HolderKeyPair.objects.create(
+            holder=holder,
+            key_id="default",
+            private_key_pem=private_pem,
+            public_key_pem=public_pem,
+            public_key_fingerprint=public_key_fingerprint(public_pem),
+            active=True,
+        )
+
+        try:
+            registration = register_holder_key(holder)
+            registered = True
+        except Exception as exc:
+            registration = {"error": str(exc)}
+            registered = False
+
+        return JsonResponse(
+            {
+                "created": True,
+                "registered": registered,
+                "holder": {
+                    "holder_id": holder.holder_id,
+                    "display_name": holder.display_name,
+                    "email": holder.email,
+                    "holder_url": holder_public_url(holder),
+                    "key_id": kp.key_id,
+                    "public_key_fingerprint": kp.public_key_fingerprint,
+                },
+                "registration": registration,
+            },
+            status=201,
+        )
     except ValueError as exc:
         return JsonResponse({"error": str(exc)}, status=400)

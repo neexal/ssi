@@ -176,6 +176,12 @@
       <div>
         <select id="holder-select"></select>
         <button class="secondary" id="refresh">Refresh Wallet</button>
+        <form id="add-holder-form" style="display:inline-block;margin-left:12px;"> 
+          <input id="new-holder-id" placeholder="student_id" required style="min-width:120px;margin-left:8px;">
+          <input id="new-holder-name" placeholder="Display name" style="min-width:160px;margin-left:8px;">
+          <input id="new-holder-email" placeholder="Email" style="min-width:160px;margin-left:8px;">
+          <button id="add-holder-button" type="submit">Add Student</button>
+        </form>
       </div>
     </header>
     <div id="wallet-grid" class="grid"></div>
@@ -193,7 +199,7 @@
     }
 
     function claimRow(walletId, key, block) {
-      const defaultDisclosures = ["student_name", "degree_title", "university_name"];
+      const defaultDisclosures = [];
       const checked = defaultDisclosures.includes(key) ? "checked" : "";
       return `
         <div class="claim">
@@ -298,6 +304,33 @@
     loadHolders()
       .then(loadWallet)
       .catch(error => setMessage(error.message, true));
+
+    // Add holder form
+    const addHolderForm = document.getElementById('add-holder-form');
+    addHolderForm.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const id = document.getElementById('new-holder-id').value.trim();
+      const name = document.getElementById('new-holder-name').value.trim();
+      const email = document.getElementById('new-holder-email').value.trim();
+      if (!id) return setMessage('student_id is required', true);
+      try {
+        setMessage('Adding student...');
+        const resp = await fetch('/api/v1/wallet/holders/create/', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ holder_id: id, display_name: name, email: email }),
+        });
+        const payload = await resp.json();
+        if (!resp.ok) throw new Error(payload.error || 'Failed to create holder');
+        await loadHolders();
+        holderSelect.value = payload.holder.holder_id;
+        await loadWallet();
+        setMessage('Student added successfully.');
+        addHolderForm.reset();
+      } catch (err) {
+        setMessage(err.message || String(err), true);
+      }
+    });
   </script>
 </body>
 </html>
