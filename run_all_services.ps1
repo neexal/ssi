@@ -25,6 +25,12 @@ if (Test-Path $VenvPython) {
 
 $Services = @(
     @{
+        Name = "Registry"
+        Path = Join-Path $Root "trusted_registry"
+        Address = "127.0.0.1:8004"
+        Url = "http://127.0.0.1:8004/"
+    },
+    @{
         Name = "Issuer"
         Path = Join-Path $Root "issuer_core"
         Address = "127.0.0.1:8001"

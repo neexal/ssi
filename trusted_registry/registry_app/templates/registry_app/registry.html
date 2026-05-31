@@ -1,0 +1,141 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Trusted Registry</title>
+  <style>
+    body { margin: 0; background: #f6f7f9; color: #172033; font-family: Arial, sans-serif; }
+    main { width: min(900px, calc(100% - 32px)); margin: 36px auto; background: #fff; border: 1px solid #d9dee8; border-radius: 8px; padding: 24px; }
+    header { display: flex; justify-content: space-between; gap: 16px; align-items: center; margin-bottom: 20px; }
+    h1 { margin: 0 0 8px; font-size: 28px; }
+    h2 { margin: 0 0 16px; font-size: 18px; }
+    p, span { color: #5d6a7e; line-height: 1.45; }
+    button { min-height: 40px; border-radius: 6px; border: 1px solid #b9c2d2; background: #fff; color: #274c77; padding: 10px 14px; font: inherit; font-weight: 700; cursor: pointer; margin-right: 8px; }
+    button.active { background: #274c77; color: #fff; }
+    button:disabled { opacity: 0.65; cursor: not-allowed; }
+    .tabs { display: flex; gap: 4px; margin-bottom: 20px; border-bottom: 2px solid #d9dee8; }
+    .tab-button { border: none; border-bottom: 3px solid transparent; border-radius: 0; background: none; color: #172033; padding: 12px 16px; cursor: pointer; font-weight: 600; }
+    .tab-button.active { border-bottom-color: #274c77; color: #274c77; }
+    .tab-content { display: none; }
+    .tab-content.active { display: block; }
+    .list { display: grid; gap: 10px; }
+    .item { border: 1px solid #d9dee8; border-radius: 6px; padding: 12px; background: #fbfcfe; display: flex; justify-content: space-between; align-items: start; }
+    .item-info { flex: 1; }
+    .item strong, .item span { display: block; overflow-wrap: anywhere; font-size: 14px; }
+    .item strong { margin-bottom: 4px; }
+    .item-actions { display: flex; gap: 8px; align-items: center; }
+    .revocation-badge { display: inline-block; background: #fef3c7; color: #92400e; border: 1px solid #fcd34d; border-radius: 4px; padding: 4px 8px; font-size: 12px; font-weight: 600; }
+    .spinner { display: inline-block; width: 12px; height: 12px; border: 2px solid #d9dee8; border-radius: 50%; border-top-color: #274c77; animation: spin 0.6s linear infinite; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <div>
+        <h1>Trusted Registry</h1>
+        <p>Manage trusted public keys and credential revocations.</p>
+      </div>
+      <button id="refresh">⟳ Refresh</button>
+    </header>
+
+    <div class="tabs">
+      <button class="tab-button active" data-tab="keys">Public Keys</button>
+      <button class="tab-button" data-tab="revocations">Revocations</button>
+    </div>
+
+    <div id="keys" class="tab-content active">
+      <h2>Registered Public Keys</h2>
+      <div class="list"><div class="item"><span>Loading...</span></div></div>
+    </div>
+
+    <div id="revocations" class="tab-content">
+      <h2>Revoked Credentials</h2>
+      <div class="list"><div class="item"><span>Loading...</span></div></div>
+    </div>
+  </main>
+
+  <script>
+    const keysContainer = document.querySelector("#keys .list");
+    const revocationsContainer = document.querySelector("#revocations .list");
+    const tabButtons = document.querySelectorAll(".tab-button");
+    const tabContents = document.querySelectorAll(".tab-content");
+
+    // Tab switching
+    tabButtons.forEach(button => {
+      button.addEventListener("click", () => {
+        tabButtons.forEach(b => b.classList.remove("active"));
+        tabContents.forEach(c => c.classList.remove("active"));
+        button.classList.add("active");
+        document.getElementById(button.dataset.tab).classList.add("active");
+        if (button.dataset.tab === "revocations") loadRevocations();
+      });
+    });
+
+    async function loadKeys() {
+      try {
+        const response = await fetch("/api/v1/registry/keys/");
+        const payload = await response.json();
+        keysContainer.innerHTML = payload.keys.length ? payload.keys.map((record) => `
+          <article class="item">
+            <div class="item-info">
+              <strong>${record.entity_name} (${record.entity_role})</strong>
+              <span>${record.entity_url}</span>
+              <span style="font-size: 12px; color: #999;">Key ID: ${record.key_id}</span>
+              <span style="font-size: 12px; color: #999; word-break: break-all;">Fingerprint: ${record.public_key_fingerprint}</span>
+            </div>
+            <div class="item-actions">
+              <span style="font-size: 12px; padding: 4px 8px; background: ${record.active ? '#d1fae5' : '#fee2e2'}; border-radius: 4px; color: ${record.active ? '#065f46' : '#991b1b'};">
+                ${record.active ? '✓ Active' : '✗ Inactive'}
+              </span>
+            </div>
+          </article>
+        `).join("") : `<div class="item"><span>No keys registered yet</span></div>`;
+      } catch (error) {
+        keysContainer.innerHTML = `<div class="item"><span style="color: #dc2626;">Error: ${error.message}</span></div>`;
+      }
+    }
+
+    async function loadRevocations() {
+      try {
+        const response = await fetch("/api/v1/registry/revocation/list/");
+        const payload = await response.json();
+        revocationsContainer.innerHTML = payload.revoked.length ? payload.revoked.map((record) => `
+          <article class="item">
+            <div class="item-info">
+              <strong>${record.credential_id}</strong>
+              <span style="font-size: 12px; color: #999;">Issuer: ${record.issuer_url}</span>
+              ${record.revocation_reason ? `<span style="font-size: 12px; color: #666;">Reason: ${record.revocation_reason}</span>` : ''}
+              <span style="font-size: 11px; color: #999;">Revoked: ${new Date(record.revoked_at).toLocaleString()}</span>
+              ${record.revoked_by ? `<span style="font-size: 11px; color: #999;">By: ${record.revoked_by}</span>` : ''}
+            </div>
+            <div class="item-actions">
+              <span class="revocation-badge">✕ Revoked</span>
+            </div>
+          </article>
+        `).join("") : `<div class="item"><span>No revoked credentials</span></div>`;
+      } catch (error) {
+        revocationsContainer.innerHTML = `<div class="item"><span style="color: #dc2626;">Error: ${error.message}</span></div>`;
+      }
+    }
+
+    document.getElementById("refresh").addEventListener("click", () => {
+      loadKeys();
+      if (document.getElementById("revocations").classList.contains("active")) {
+        loadRevocations();
+      }
+    });
+
+    // Initial load
+    loadKeys();
+    
+    // Auto-refresh keys every 3 seconds
+    setInterval(() => {
+      if (!document.getElementById("revocations").classList.contains("active")) {
+        loadKeys();
+      }
+    }, 3000);
+  </script>
+</body>
+</html>

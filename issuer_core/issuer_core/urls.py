@@ -8,4 +8,5 @@ urlpatterns = [
     path("admin/", admin.site.urls),
     path("api/v1/issue/", views.issue_credential, name="issue-credential"),
     path("api/v1/pki/public-key/", views.public_key, name="issuer-public-key"),
+    path("api/v1/revoke/", views.revoke_issued_credential, name="issuer-revoke-credential"),
 ]
