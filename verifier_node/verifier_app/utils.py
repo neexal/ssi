@@ -1,5 +1,6 @@
 import hashlib
-from urllib.parse import urlparse
+import json
+from urllib.parse import urlencode, urlparse
 
 import requests
 from cryptography.exceptions import InvalidSignature
@@ -8,7 +9,9 @@ from cryptography.hazmat.primitives.asymmetric import padding
 
 
 HASH_JOINER = "\x00"
-ISSUER_PUBLIC_KEY_PATH = "/api/v1/pki/public-key/"
+REGISTRY_ORIGIN = "http://127.0.0.1:8004"
+REGISTRY_RESOLVE_PATH = "/api/v1/registry/keys/resolve/"
+REGISTRY_REVOCATION_PATH = "/api/v1/registry/revocation/check/"
 REQUEST_TIMEOUT_SECONDS = 3.0
 
 
@@ -20,27 +23,60 @@ def compute_claim_hash(value: str, salt: str) -> str:
     return hashlib.sha256(f"{value}{salt}".encode("utf-8")).hexdigest()
 
 
-def compile_hash_payload(claim_hashes: list[str]) -> bytes:
+def public_key_fingerprint(public_key_pem: str) -> str:
+    return hashlib.sha256(public_key_pem.strip().encode("utf-8")).hexdigest()
+
+
+def compile_hash_payload(claim_hashes: list[str], holder_binding: str | None = None) -> bytes:
     if not all(isinstance(item, str) and item for item in claim_hashes):
         raise VerificationError("Every evaluated claim hash must be a non-empty string.")
-    return HASH_JOINER.join(sorted(claim_hashes)).encode("utf-8")
+    payload_items = list(claim_hashes)
+    if holder_binding:
+        payload_items.append(f"holder:{holder_binding}")
+    return HASH_JOINER.join(sorted(payload_items)).encode("utf-8")
 
 
-def issuer_public_key_url(issuer: str) -> str:
-    parsed = urlparse(issuer)
-    if parsed.scheme != "http" or parsed.hostname != "127.0.0.1" or parsed.port != 8001:
-        raise VerificationError("Issuer route is outside the trusted local issuer boundary.")
-    return f"{parsed.scheme}://{parsed.netloc}{ISSUER_PUBLIC_KEY_PATH}"
+def canonical_presentation_payload(presentation: dict) -> bytes:
+    unsigned = {key: value for key, value in presentation.items() if key != "holderProof"}
+    return json.dumps(unsigned, sort_keys=True, separators=(",", ":")).encode("utf-8")
 
 
-def fetch_issuer_public_key(issuer: str) -> str:
-    url = issuer_public_key_url(issuer)
-    response = requests.get(url, timeout=REQUEST_TIMEOUT_SECONDS)
+def trusted_key_url(entity_url: str, entity_role: str, key_id: str) -> str:
+    parsed = urlparse(entity_url)
+    if parsed.scheme != "http" or parsed.hostname != "127.0.0.1" or not parsed.port:
+        raise VerificationError("Entity route is outside the trusted local boundary.")
+    query = urlencode({"entity_url": entity_url, "entity_role": entity_role, "key_id": key_id})
+    return f"{REGISTRY_ORIGIN}{REGISTRY_RESOLVE_PATH}?{query}"
+
+
+def check_credential_revocation(credential_id: str) -> None:
+    query = urlencode({"credential_id": credential_id})
+    response = requests.get(
+        f"{REGISTRY_ORIGIN}{REGISTRY_REVOCATION_PATH}?{query}",
+        timeout=REQUEST_TIMEOUT_SECONDS
+    )
     response.raise_for_status()
     payload = response.json()
+    
+    if payload.get("revoked") is True:
+        reason = payload.get("revocation_reason", "No reason provided")
+        raise VerificationError(f"Credential has been revoked: {reason}")
+
+
+def fetch_trusted_public_key(entity_url: str, entity_role: str, key_id: str, expected_fingerprint: str | None) -> str:
+    response = requests.get(trusted_key_url(entity_url, entity_role, key_id), timeout=REQUEST_TIMEOUT_SECONDS)
+    response.raise_for_status()
+    payload = response.json()
+    if payload.get("trusted") is not True:
+        raise VerificationError("Trusted registry did not confirm this key.")
     public_key_pem = payload.get("public_key_pem")
     if not isinstance(public_key_pem, str) or "BEGIN PUBLIC KEY" not in public_key_pem:
-        raise VerificationError("Issuer returned an invalid public key payload.")
+        raise VerificationError("Trusted registry returned an invalid public key payload.")
+    computed_fingerprint = public_key_fingerprint(public_key_pem)
+    if payload.get("public_key_fingerprint") != computed_fingerprint:
+        raise VerificationError("Trusted registry key fingerprint does not match the public key.")
+    if expected_fingerprint and expected_fingerprint != computed_fingerprint:
+        raise VerificationError("Expected key fingerprint does not match the trusted public key.")
     return public_key_pem
 
 
@@ -81,11 +117,11 @@ def evaluate_claims(claims: dict) -> tuple[list[str], dict[str, str]]:
 
 def verify_signature(public_key_pem: str, payload: bytes, signature_hex: str) -> None:
     if not isinstance(signature_hex, str) or not signature_hex:
-        raise VerificationError("Credential proof is missing a hex signature.")
+        raise VerificationError("Proof is missing a hex signature.")
     try:
         signature = bytes.fromhex(signature_hex)
     except ValueError as exc:
-        raise VerificationError("Credential proof signature is not valid hex.") from exc
+        raise VerificationError("Proof signature is not valid hex.") from exc
 
     public_key = serialization.load_pem_public_key(public_key_pem.encode("utf-8"))
     public_key.verify(
@@ -107,21 +143,52 @@ def verify_presentation_document(presentation: dict) -> dict:
     if not isinstance(credential, dict):
         raise VerificationError("Presentation must include a verifiableCredential object.")
 
+    credential_id = credential.get("id")
+    if isinstance(credential_id, str) and credential_id:
+        check_credential_revocation(credential_id)
+
     issuer = credential.get("issuer")
     if not isinstance(issuer, str):
         raise VerificationError("Credential issuer must be a route string.")
 
-    claims = credential.get("credentialSubject", {}).get("claims")
-    evaluated_hashes, disclosed_claims = evaluate_claims(claims)
-    payload = compile_hash_payload(evaluated_hashes)
+    subject = credential.get("credentialSubject", {})
+    holder_binding = subject.get("holder")
+    if not isinstance(holder_binding, dict):
+        raise VerificationError("Credential is not bound to a holder key.")
+    holder_url = holder_binding.get("url")
+    holder_key_id = str(holder_binding.get("keyId", "default"))
+    holder_fingerprint = holder_binding.get("publicKeyFingerprint")
+    if not isinstance(holder_url, str) or not isinstance(holder_fingerprint, str):
+        raise VerificationError("Credential holder binding is incomplete.")
 
-    proof = credential.get("proof")
-    if not isinstance(proof, dict):
+    evaluated_hashes, disclosed_claims = evaluate_claims(subject.get("claims"))
+    holder_binding_payload = f"{holder_url}|{holder_key_id}|{holder_fingerprint}"
+    issuer_payload = compile_hash_payload(evaluated_hashes, holder_binding_payload)
+
+    issuer_proof = credential.get("proof")
+    if not isinstance(issuer_proof, dict):
         raise VerificationError("Credential proof must be an object.")
+    issuer_key_id = str(issuer_proof.get("keyId", "default"))
+    issuer_fingerprint = issuer_proof.get("publicKeyFingerprint")
+    if issuer_fingerprint is not None and not isinstance(issuer_fingerprint, str):
+        raise VerificationError("Issuer proof fingerprint must be a string.")
+    issuer_public_key_pem = fetch_trusted_public_key(issuer, "issuer", issuer_key_id, issuer_fingerprint)
+    verify_signature(issuer_public_key_pem, issuer_payload, issuer_proof.get("signature"))
 
-    public_key_pem = fetch_issuer_public_key(issuer)
-    verify_signature(public_key_pem, payload, proof.get("signature"))
-    return {"valid": True, "disclosed_claims": disclosed_claims}
+    holder_proof = presentation.get("holderProof")
+    if not isinstance(holder_proof, dict):
+        raise VerificationError("Presentation is missing holder proof.")
+    if holder_proof.get("holder") != holder_url:
+        raise VerificationError("Holder proof does not match credential holder binding.")
+    holder_proof_key_id = str(holder_proof.get("keyId", holder_key_id))
+    if holder_proof_key_id != holder_key_id:
+        raise VerificationError("Holder proof key id does not match credential holder binding.")
+    if holder_proof.get("publicKeyFingerprint") != holder_fingerprint:
+        raise VerificationError("Holder proof fingerprint does not match credential holder binding.")
+    holder_public_key_pem = fetch_trusted_public_key(holder_url, "holder", holder_key_id, holder_fingerprint)
+    verify_signature(holder_public_key_pem, canonical_presentation_payload(presentation), holder_proof.get("signature"))
+
+    return {"valid": True, "holder": holder_url, "disclosed_claims": disclosed_claims}
 
 
 def safe_verify(presentation: dict) -> dict:
@@ -130,7 +197,7 @@ def safe_verify(presentation: dict) -> dict:
     except InvalidSignature:
         return {"valid": False, "reason": "RSA-PSS signature verification failed."}
     except requests.RequestException as exc:
-        return {"valid": False, "reason": f"Unable to fetch issuer public key: {exc.__class__.__name__}."}
+        return {"valid": False, "reason": f"Unable to resolve trusted public key: {exc.__class__.__name__}."}
     except (VerificationError, TypeError, ValueError) as exc:
         return {"valid": False, "reason": str(exc)}
     except Exception:

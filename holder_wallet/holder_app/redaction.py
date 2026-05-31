@@ -2,6 +2,10 @@ from copy import deepcopy
 from datetime import datetime, timezone
 from uuid import uuid4
 
+from .crypto import canonical_presentation_payload, public_key_fingerprint, sign_payload
+from .models import HolderProfile
+from .registry import holder_public_url
+
 
 REQUIRED_VC_KEYS = {"@context", "id", "type", "issuer", "credentialSubject", "proof"}
 REQUIRED_CLAIM_KEYS = {"value", "salt", "hash"}
@@ -26,7 +30,7 @@ def validate_credential_structure(credential: dict) -> None:
             )
 
 
-def build_selective_presentation(credential: dict, disclosed_keys: list[str]) -> dict:
+def build_selective_presentation(credential: dict, disclosed_keys: list[str], holder: HolderProfile) -> dict:
     validate_credential_structure(credential)
     disclosed = {str(key) for key in disclosed_keys}
     reduced_credential = deepcopy(credential)
@@ -37,11 +41,23 @@ def build_selective_presentation(credential: dict, disclosed_keys: list[str]) ->
             claim_block.pop("value", None)
             claim_block.pop("salt", None)
 
-    return {
+    holder_fingerprint = public_key_fingerprint(holder.keypair.public_key_pem)
+    presentation = {
         "@context": ["https://example.local/ssi/presentation/v1"],
         "id": f"urn:uuid:{uuid4()}",
         "type": ["VerifiablePresentation", "SelectiveDisclosurePresentation"],
-        "holder": "http://127.0.0.1:8002",
+        "holder": holder_public_url(holder),
         "created": datetime.now(timezone.utc).isoformat(),
         "verifiableCredential": reduced_credential,
     }
+    signature = sign_payload(canonical_presentation_payload(presentation), holder.keypair.private_key_pem)
+    presentation["holderProof"] = {
+        "type": "RsaSignaturePssSha256-2026",
+        "created": datetime.now(timezone.utc).isoformat(),
+        "proofPurpose": "authentication",
+        "holder": holder_public_url(holder),
+        "keyId": holder.keypair.key_id,
+        "publicKeyFingerprint": holder_fingerprint,
+        "signature": signature,
+    }
+    return presentation

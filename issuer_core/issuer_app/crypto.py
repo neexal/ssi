@@ -67,8 +67,15 @@ def salt_and_hash_claims(raw_claims: dict[str, object]) -> dict[str, dict[str, s
     return protected_claims
 
 
-def compile_hash_payload(claim_blocks: dict[str, dict[str, str]]) -> bytes:
+def public_key_fingerprint(public_key_pem: str) -> str:
+    return hashlib.sha256(public_key_pem.strip().encode("utf-8")).hexdigest()
+
+
+def compile_hash_payload(claim_blocks: dict[str, dict[str, str]], holder_binding: str | None = None) -> bytes:
     hashes_to_sign = sorted(str(block["hash"]) for block in claim_blocks.values())
+    if holder_binding:
+        hashes_to_sign.append(f"holder:{holder_binding}")
+        hashes_to_sign = sorted(hashes_to_sign)
     return HASH_JOINER.join(hashes_to_sign).encode("utf-8")
 
 

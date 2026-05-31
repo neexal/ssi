@@ -54,7 +54,7 @@
       font-weight: 700;
       font-size: 14px;
     }
-    input {
+    input, select {
       width: 100%;
       border: 1px solid #b9c2d2;
       border-radius: 6px;
@@ -74,6 +74,7 @@
       cursor: pointer;
     }
     button:disabled { opacity: .65; cursor: wait; }
+    button.danger { background: var(--danger); }
     .status {
       display: grid;
       gap: 14px;
@@ -127,6 +128,16 @@
       color: var(--accent-2);
     }
     .message.error { color: var(--danger); }
+    .message.success { color: #059669; }
+    .tabs { display: flex; gap: 4px; margin-bottom: 16px; border-bottom: 2px solid var(--line); }
+    .tab-button { border: none; border-bottom: 3px solid transparent; border-radius: 0; background: none; color: var(--ink); padding: 10px 12px; cursor: pointer; font-weight: 600; font-size: 14px; }
+    .tab-button.active { border-bottom-color: var(--accent); color: var(--accent); }
+    .tab-content { display: none; }
+    .tab-content.active { display: block; }
+    .credentials-list { display: grid; gap: 8px; max-height: 400px; overflow-y: auto; }
+    .credential-item { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 10px; background: #f9fafb; border: 1px solid var(--line); border-radius: 6px; font-size: 13px; }
+    .credential-item strong { color: var(--accent-2); word-break: break-all; flex: 1; }
+    .credential-item button { min-height: 32px; padding: 6px 10px; font-size: 12px; margin: 0; }
     @media (max-width: 860px) {
       main { grid-template-columns: 1fr; margin-top: 18px; }
     }
@@ -136,44 +147,167 @@
   <main>
     <section>
       <h1>Issuer Server Core</h1>
-      <p>Build a salted, signed identity credential and push it directly to the holder wallet running on port 8002.</p>
-      <form id="issuer-form">
-        <label>
-          Identity ID
-          <input name="ID" value="Nischal" autocomplete="off" required>
-        </label>
-        <label>
-          Age
-          <input name="age" value="27" inputmode="numeric" autocomplete="off" required>
-        </label>
-        <label>
-          Status
-          <input name="status" value="sta" autocomplete="off" required>
-        </label>
-        <button id="sign-button" type="submit">Sign & Export</button>
-        <div id="message" class="message"></div>
-      </form>
+
+      <div class="tabs">
+        <button class="tab-button active" data-tab="issue">Issue Credential</button>
+        <button class="tab-button" data-tab="revoke">Revoke Credential</button>
+      </div>
+
+      <div id="issue" class="tab-content active">
+        <p>Build a salted, signed university degree credential and push it directly to the holder wallet running on port 8002.</p>
+        <form id="issuer-form">
+          <label>
+            Student Wallet
+            <select id="holder-select" required></select>
+          </label>
+          <label>
+            Student Name
+            <input name="student_name" value="Nischal Ghimire" autocomplete="off" required>
+          </label>
+          <label>
+            Student ID
+            <input name="student_id" value="TU20250001" autocomplete="off" required>
+          </label>
+          <label>
+            Degree Title
+            <input name="degree_title" value="Bachelor of Computer Science" autocomplete="off" required>
+          </label>
+          <label>
+            University Name
+            <input name="university_name" value="Tribhuvan University" autocomplete="off" required>
+          </label>
+          <label>
+            Graduation Year
+            <input name="graduation_year" value="2026" inputmode="numeric" autocomplete="off" required>
+          </label>
+          <label>
+            Department
+            <input name="department" value="Computer Science" autocomplete="off" required>
+          </label>
+          <label>
+            Grade Summary
+            <input name="grade_summary" value="First Division" autocomplete="off" required>
+          </label>
+          <button id="sign-button" type="submit">Sign & Export</button>
+          <div id="message" class="message"></div>
+        </form>
+      </div>
+
+      <div id="revoke" class="tab-content">
+        <p>Revoke a previously issued credential.</p>
+        <form id="revoke-form">
+          <label>
+            Credential ID
+            <input id="credential-id-input" placeholder="urn:uuid:..." required>
+          </label>
+          <label>
+            Revocation Reason
+            <input id="revocation-reason-input" placeholder="e.g., Student graduated" required>
+          </label>
+          <button id="revoke-button" type="submit" class="danger">Revoke Credential</button>
+          <div id="revoke-message" class="message"></div>
+        </form>
+        <div style="margin-top: 24px;">
+          <h2>Recent Credentials</h2>
+          <div id="credentials-list" class="credentials-list">
+            <div style="color: var(--muted); font-size: 13px;">Loading credentials...</div>
+          </div>
+        </div>
+      </div>
     </section>
+
     <aside>
       <h2>Asymmetric Key</h2>
       <span class="pill"><span class="dot"></span> RSA-2048 active</span>
       <code>Public key preview: {{ public_key_preview }}...</code>
+      <code>Trusted registry: {{ registry_origin }} ({{ registry_status }})</code>
       <div class="status">
         <h2>Last Credential</h2>
         <pre id="last-output">{}</pre>
       </div>
     </aside>
   </main>
+
   <script>
     const form = document.getElementById("issuer-form");
     const message = document.getElementById("message");
     const output = document.getElementById("last-output");
     const button = document.getElementById("sign-button");
+    const holderSelect = document.getElementById("holder-select");
+    
+    const revokeForm = document.getElementById("revoke-form");
+    const revokeMessage = document.getElementById("revoke-message");
+    const revokeButton = document.getElementById("revoke-button");
+    const credentialIdInput = document.getElementById("credential-id-input");
+    const revocationReasonInput = document.getElementById("revocation-reason-input");
+    const credentialsList = document.getElementById("credentials-list");
+
+    const tabButtons = document.querySelectorAll(".tab-button");
+    const tabContents = document.querySelectorAll(".tab-content");
+    let issuedCredentials = [];
+
+    // Tab switching
+    tabButtons.forEach(btn => {
+      btn.addEventListener("click", () => {
+        tabButtons.forEach(b => b.classList.remove("active"));
+        tabContents.forEach(c => c.classList.remove("active"));
+        btn.classList.add("active");
+        document.getElementById(btn.dataset.tab).classList.add("active");
+        if (btn.dataset.tab === "revoke") loadCredentialsForRevocation();
+      });
+    });
 
     function setMessage(text, isError = false) {
       message.textContent = text;
-      message.classList.toggle("error", isError);
+      message.classList.remove("error", "success");
+      if (isError) message.classList.add("error");
+      else if (text) message.classList.add("success");
     }
+
+    function setRevokeMessage(text, isError = false) {
+      revokeMessage.textContent = text;
+      revokeMessage.classList.remove("error", "success");
+      if (isError) revokeMessage.classList.add("error");
+      else if (text) revokeMessage.classList.add("success");
+    }
+
+    async function loadHolders() {
+      const response = await fetch("http://127.0.0.1:8002/api/v1/wallet/holders/");
+      const payload = await response.json();
+      holderSelect.innerHTML = payload.holders.map((holder) => (
+        `<option value="${holder.holder_id}" data-url="${holder.holder_url}" data-key-id="${holder.key_id}">
+          ${holder.display_name} (${holder.holder_id})
+        </option>`
+      )).join("");
+    }
+
+    async function loadCredentialsForRevocation() {
+      try {
+        credentialsList.innerHTML = '<div style="color: var(--muted); font-size: 13px;">Loading...</div>';
+        const response = await fetch("http://127.0.0.1:8002/api/v1/wallet/credentials/");
+        const payload = await response.json();
+        issuedCredentials = payload.credentials;
+        
+        if (issuedCredentials.length === 0) {
+          credentialsList.innerHTML = '<div style="color: var(--muted); font-size: 13px;">No credentials found</div>';
+          return;
+        }
+
+        credentialsList.innerHTML = issuedCredentials.map((cred) => `
+          <div class="credential-item">
+            <strong title="${cred.credential_id}">${cred.credential_id.substring(0, 40)}...</strong>
+            <button type="button" onclick="selectCredential('${cred.credential_id}')">Use</button>
+          </div>
+        `).join("");
+      } catch (error) {
+        credentialsList.innerHTML = `<div style="color: var(--danger); font-size: 13px;">Error: ${error.message}</div>`;
+      }
+    }
+
+    window.selectCredential = (credentialId) => {
+      credentialIdInput.value = credentialId;
+      credentialIdInput.focus();
+    };
 
     form.addEventListener("submit", async (event) => {
       event.preventDefault();
@@ -181,11 +315,18 @@
       setMessage("Signing credential...");
 
       const claims = Object.fromEntries(new FormData(form).entries());
+      delete claims[""];
+      const selectedHolder = holderSelect.selectedOptions[0];
+      const holder = {
+        id: holderSelect.value,
+        url: selectedHolder.dataset.url,
+        key_id: selectedHolder.dataset.keyId
+      };
       try {
         const issueResponse = await fetch("/api/v1/issue/", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ claims })
+          body: JSON.stringify({ claims, holder })
         });
         const credential = await issueResponse.json();
         if (!issueResponse.ok) {
@@ -205,13 +346,54 @@
           throw new Error(holderResult.error || "Holder wallet rejected the credential.");
         }
 
-        setMessage(`Credential stored in holder wallet as record #${holderResult.wallet_id}.`);
+        setMessage(`✓ Credential stored in holder wallet as record #${holderResult.wallet_id}.`);
       } catch (error) {
         setMessage(error.message, true);
       } finally {
         button.disabled = false;
       }
     });
+
+    revokeForm.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      revokeButton.disabled = true;
+      setRevokeMessage("Revoking credential...");
+
+      const credentialId = credentialIdInput.value.trim();
+      const reason = revocationReasonInput.value.trim();
+
+      if (!credentialId) {
+        setRevokeMessage("Credential ID is required.", true);
+        revokeButton.disabled = false;
+        return;
+      }
+
+      try {
+        const response = await fetch("/api/v1/revoke/", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ credential_id: credentialId, reason })
+        });
+        const result = await response.json();
+        
+        if (!response.ok) {
+          throw new Error(result.error || "Revocation failed.");
+        }
+
+        setRevokeMessage(`✓ Credential revoked successfully at ${new Date(result.revoked_at).toLocaleString()}`);
+        credentialIdInput.value = "";
+        revocationReasonInput.value = "";
+        
+        // Reload credentials list
+        setTimeout(loadCredentialsForRevocation, 500);
+      } catch (error) {
+        setRevokeMessage(error.message, true);
+      } finally {
+        revokeButton.disabled = false;
+      }
+    });
+
+    loadHolders().catch(error => setMessage(error.message, true));
   </script>
 </body>
 </html>

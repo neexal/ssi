@@ -38,9 +38,19 @@
     h2 { font-size: 17px; }
     h3 { font-size: 15px; color: var(--muted); }
     p { margin: 7px 0 0; color: var(--muted); line-height: 1.5; }
-    button {
+    select, button {
       min-height: 42px;
       border-radius: 6px;
+      font: inherit;
+    }
+    select {
+      border: 1px solid #b9c2d2;
+      padding: 0 12px;
+      background: #fff;
+      color: var(--ink);
+      min-width: 260px;
+    }
+    button {
       border: 0;
       padding: 0 16px;
       color: #fff;
@@ -161,9 +171,12 @@
     <header>
       <div>
         <h1>Holder Device Wallet</h1>
-        <p>Review stored credentials, choose disclosures, and submit a selective presentation to the verifier on port 8003.</p>
+        <p>Select a student wallet, choose disclosures, and submit a signed presentation to the verifier.</p>
       </div>
-      <button class="secondary" id="refresh">Refresh Wallet</button>
+      <div>
+        <select id="holder-select"></select>
+        <button class="secondary" id="refresh">Refresh Wallet</button>
+      </div>
     </header>
     <div id="wallet-grid" class="grid"></div>
     <div id="message" class="message"></div>
@@ -172,6 +185,7 @@
     const grid = document.getElementById("wallet-grid");
     const message = document.getElementById("message");
     const refreshButton = document.getElementById("refresh");
+    const holderSelect = document.getElementById("holder-select");
 
     function setMessage(text, isError = false) {
       message.textContent = text;
@@ -179,7 +193,8 @@
     }
 
     function claimRow(walletId, key, block) {
-      const checked = key === "ID" ? "checked" : "";
+      const defaultDisclosures = ["student_name", "degree_title", "university_name"];
+      const checked = defaultDisclosures.includes(key) ? "checked" : "";
       return `
         <div class="claim">
           <div>
@@ -201,6 +216,7 @@
         <article class="credential" data-wallet-card="${record.wallet_id}">
           <div>
             <h2>${record.credential.type.join(" / ")}</h2>
+            <p>${record.holder_name} (${record.holder_id})</p>
             <p>${record.credential_id}</p>
           </div>
           ${rows}
@@ -210,12 +226,21 @@
         </article>`;
     }
 
+    async function loadHolders() {
+      const response = await fetch("/api/v1/wallet/holders/");
+      const payload = await response.json();
+      holderSelect.innerHTML = payload.holders.map((holder) => (
+        `<option value="${holder.holder_id}">${holder.display_name} (${holder.holder_id})</option>`
+      )).join("");
+    }
+
     async function loadWallet() {
       setMessage("Loading wallet...");
-      const response = await fetch("/api/v1/wallet/credentials/");
+      const holderId = holderSelect.value;
+      const response = await fetch(`/api/v1/wallet/credentials/?holder_id=${encodeURIComponent(holderId)}`);
       const payload = await response.json();
       if (!payload.credentials.length) {
-        grid.innerHTML = `<div class="empty">No credentials stored yet. Use the issuer dashboard on port 8001 to sign and export one.</div>`;
+        grid.innerHTML = `<div class="empty">No credentials stored for this student yet. Use the issuer dashboard on port 8001 to sign and export one.</div>`;
         setMessage("");
         return;
       }
@@ -269,7 +294,10 @@
     });
 
     refreshButton.addEventListener("click", loadWallet);
-    loadWallet().catch(error => setMessage(error.message, true));
+    holderSelect.addEventListener("change", loadWallet);
+    loadHolders()
+      .then(loadWallet)
+      .catch(error => setMessage(error.message, true));
   </script>
 </body>
 </html>
